@@ -1,5 +1,5 @@
-import socket
 import random
+import socket
 import time
 import psycopg2
 from sqlalchemy import create_engine
@@ -8,15 +8,21 @@ from sqlalchemy import Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 import pygame
 
+engine = create_engine("postgresql+psycopg2://postgres:admin@localhost/postgres")
+Session = sessionmaker(bind=engine)
+Base = declarative_base()
+s = Session()
+
+# Настройка констант для pygame
 pygame.init()
-WIDTH_ROOM, HEIGHT_ROOM = 4000, 4000
-WIDTH_SERVER, HEIGHT_SERVER = 300, 300
+WIDHT_ROOM, HEIGHT_ROOM = 4000, 4000
+WIDHT_SERVER, HEIGHT_SERVER = 300, 300
 FPS = 100
 
-screen = pygame.display.set_mode((WIDTH_SERVER, HEIGHT_SERVER))
-pygame.display.set_caption("server")
+# Создание окна сервера
+screen = pygame.display.set_mode((WIDHT_SERVER, HEIGHT_SERVER))
+pygame.display.set_caption("Сервер")
 clock = pygame.time.Clock()
-clock.tick(FPS)
 
 
 def find(vector: str):
@@ -43,38 +49,29 @@ def find_color(info: str):
     return ""
 
 
-
-
-engine = create_engine("postgresql+psycopg2://postgres: 1111@localhost/rebotica")
-Session = sessionmaker (bind=engine)
-Base = declarative_base()
-s = Session()
-
-
+# Декларативный класс таблицы игроков
 class Player(Base):
     __tablename__ = "gamers"
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(250))
     address = Column(String)
-    X = Column(Integer, default=500)
+    x = Column(Integer, default=500)
     y = Column(Integer, default=500)
     size = Column(Integer, default=50)
     errors = Column(Integer, default=0)
     abs_speed = Column(Integer, default=1)
     speed_x = Column(Integer, default=0)
     speed_y = Column(Integer, default=0)
+    color = Column(String(250), default="red")  # Добавили цвет
+    w_vision = Column(Integer, default=800)
+    h_vision = Column(Integer, default=600)  # Добавили размер квадрат
 
     def __init__(self, name, address):
         self.name = name
         self.address = address
-        self.abs_speed = 1
-        self.speed_x = 0
-        self.speed_y = 0
-        self.color = "blue"
-        self.w_vision = 800
-        self.h_vision = 600
 
 
+# Локальный класс таблицы игроков
 class LocalPlayer:
     def __init__(self, id, name, sock, addr):
         self.id = id
@@ -89,10 +86,22 @@ class LocalPlayer:
         self.abs_speed = 1
         self.speed_x = 0
         self.speed_y = 0
+        self.color = "red"
+        self.w_vision = 800
+        self.h_vision = 600
 
     def update(self):
         self.x += self.speed_x
         self.y += self.speed_y
+
+    def change_speed(self, vector):
+        vector = find(vector)
+        if vector[0] == 0 and vector[1] == 0:
+            self.speed_x = self.speed_y = 0
+        else:
+            vector = vector[0] * self.abs_speed, vector[1] * self.abs_speed
+            self.speed_x = vector[0]
+            self.speed_y = vector[1]
 
     def load(self):
         self.size = self.db.size
@@ -122,18 +131,7 @@ class LocalPlayer:
         s.commit()
 
 
-    def change_speed(self, vector):
-        vector = find(vector)
-        if vector[0] == 0 and vector[1] == 0:
-            self.speed_x = self.speed_y = 0
-        else:
-            vector = vector[0] * self.abs_speed, vector[1] * self.abs_speed
-            self.speed_x = vector[0]
-            self.speed_y = vector[1]
-
-
 Base.metadata.create_all(engine)
-
 
 main_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # Настраиваем сокет
 main_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)  # Отключаем пакетирование
@@ -142,15 +140,14 @@ main_socket.setblocking(False)  # Непрерывность, не ждём от
 main_socket.listen(5)  # Прослушка входящих соединений, 5 одновременных подключений
 print("Сокет создался")
 
-server_works = True
 players = {}
-
+server_works = True
 while server_works:
     clock.tick(FPS)
     try:
         # проверяем желающих войти в игру
         new_socket, addr = main_socket.accept()  # принимаем входящие
-        print("Подключился", addr)
+        print('Подключился', addr)
         new_socket.setblocking(False)
         login = new_socket.recv(1024).decode()
         player = Player("Имя", addr)
@@ -159,21 +156,26 @@ while server_works:
             data = find_color(login[6:])
             player.name, player.color = data
 
-        addr = f'({addr[0]}, {addr[1]})'
-        data = s.query(Player).filter(Player.address == addr)
-
-        s.query(Player).filter(Player.id == id).delete()
+        s.merge(player)
         s.commit()
 
         addr = f'({addr[0]},{addr[1]})'
         data = s.query(Player).filter(Player.address == addr)
-
         for user in data:
             player = LocalPlayer(user.id, "Имя", new_socket, addr).load()
             players[user.id] = player
 
     except BlockingIOError:
         pass
+
+    # Считываем команды игроков
+    for id in list(players):
+        try:
+            data = players[id].sock.recv(1024).decode()
+            print("Получил", data)
+            players[id].change_speed(data)
+        except:
+            pass
 
     # Определим, что видит каждый игрок
     visible_bacteries = {}
@@ -215,37 +217,36 @@ while server_works:
     for id in list(players):
         visible_bacteries[id] = "<" + ",".join(visible_bacteries[id]) + ">"
 
+    # Отправляем статус игрового поля
+    for id in list(players):
+        try:
+            players[id].sock.send(visible_bacteries[id].encode())
+        except:
+            players[id].sock.close()
+            del players[id]
+            # Так же удаляем строчку из БД
+            s.query(Player).filter(Player.id == id).delete()
+            s.commit()
+            print("Сокет закрыт")
+
+    # Отрисовываем серверное окно
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             server_works = False
 
-    screen.fill("black")
+    screen.fill('black')
     for id in list(players):
         player = players[id]
-
-        x = player.x * WIDTH_SERVER // WIDTH_ROOM
+        x = player.x * WIDHT_SERVER // WIDHT_ROOM
         y = player.y * HEIGHT_SERVER // HEIGHT_ROOM
-        size = player.size * WIDTH_SERVER // WIDTH_ROOM
+        size = player.size * WIDHT_SERVER // WIDHT_ROOM
         pygame.draw.circle(screen, player.color, (x, y), size)  # Цвет
-        pygame.display.update()
 
+    for id in list(players):
+        player = players[id]
+        players[id].update()
 
-
-
-    for sock in list(players):
-        try:
-            data = players[sock].recv(1024).decode()
-            print("Получил", data)
-        except:
-            pass
-
-    for sock in list(players):
-        try:
-            players[sock].send("Привет".encode())
-        except:
-            players[sock].remove(sock)
-            socket.close()
-            print("Сокет закрыт")
+    pygame.display.update()
 
 pygame.quit()
 main_socket.close()

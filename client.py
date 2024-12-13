@@ -118,7 +118,7 @@ while run:
                 vector = 0, 0
 
 
-        data = main_socket.recv(1024).decode()
+        data = main_socke.recv(1024).decode()
         # print(data)
     data = find(data).split(",")  # Разбиваем на шары
 

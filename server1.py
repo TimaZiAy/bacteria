@@ -1,3 +1,4 @@
+import math
 import random
 import socket
 import time
@@ -7,6 +8,8 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy import Column, Integer, String
 from sqlalchemy.orm import sessionmaker
 import pygame
+from russian_names import RussianNames
+from server import WIDTH_ROOM
 
 engine = create_engine("postgresql+psycopg2://postgres:admin@localhost/postgres")
 Session = sessionmaker(bind=engine)
@@ -18,6 +21,15 @@ pygame.init()
 WIDHT_ROOM, HEIGHT_ROOM = 4000, 4000
 WIDHT_SERVER, HEIGHT_SERVER = 300, 300
 FPS = 100
+players = {}
+
+
+colors = ['Maroon', 'DarkRed', 'FireBrick', 'Red', 'Salmon', 'Tomato', 'Coral', 'OrangeRed', 'Chocolate', 'SandyBrown',
+          'DarkOrange', 'Orange', 'DarkGoldenrod', 'Goldenrod', 'Gold', 'Olive', 'Yellow', 'YellowGreen', 'GreenYellow',
+          'Chartreuse', 'LawnGreen', 'Green', 'Lime', 'SpringGreen', 'MediumSpringGreen', 'Turquoise',
+          'LightSeaGreen', 'MediumTurquoise', 'Teal', 'DarkCyan', 'Aqua', 'Cyan', 'DeepSkyBlue',
+          'DodgerBlue', 'RoyalBlue', 'Navy', 'DarkBlue', 'MediumBlue']
+MOBS_QUANTITY = 25
 
 # Создание окна сервера
 screen = pygame.display.set_mode((WIDHT_SERVER, HEIGHT_SERVER))
@@ -91,8 +103,25 @@ class LocalPlayer:
         self.h_vision = 600
 
     def update(self):
-        self.x += self.speed_x
-        self.y += self.speed_y
+        if self.x-self.size <= 0:
+            if self.speed_x >= 0:
+                self.x += self.speed_x
+
+        elif self.x + self.size >= WIDTH_ROOM:
+            if self.speed_x <= 0:
+                self.x += self.speed_x
+        else:
+            self.x -= self.speed_x
+
+        if self.y - self.size <= 0:
+            if self.speed_y >= 0:
+                self.y += self.speed_y
+
+        elif self.y + self.size >= WIDTH_ROOM:
+            if self.speed_y <= 0:
+                self.y += self.speed_y
+        else:
+            self.y -= self.speed_y
 
     def change_speed(self, vector):
         vector = find(vector)
@@ -140,10 +169,37 @@ main_socket.setblocking(False)  # Непрерывность, не ждём от
 main_socket.listen(5)  # Прослушка входящих соединений, 5 одновременных подключений
 print("Сокет создался")
 
-players = {}
+names = RussianNames(count=MOBS_QUANTITY * 2, patronymic=False, surname=False, rare=True)
+names = list(set(names))  # Список неповторяющихся имён
+for x in range(MOBS_QUANTITY):
+    server_mob = Player(names[x], None)
+    server_mob.color = random.choice(colors)
+    server_mob.x, server_mob.y = random.randint(0, WIDHT_ROOM), random.randint(0, HEIGHT_ROOM)
+    server_mob.speed_x, server_mob.speed_y = random.randint(-1, 1), random.randint(-1, 1)
+    server_mob.size = random.randint(10, 100)
+    s.add(server_mob)
+    s.commit()
+    local_mob = LocalPlayer(server_mob.id, server_mob.name, None, None).load()
+    players[server_mob.id] = local_mob  # Записываем всех мобов в словарь
+tick = -1
+
 server_works = True
 while server_works:
     clock.tick(FPS)
+    tick += 1
+    if tick % 200 == 0:
+        try:
+            # проверяем желающих войти в игру
+            new_socket, addr = main_socket.accept()  # принимаем входящие
+            print('Подключился', addr)
+            new_socket.setblocking(False)
+            login = new_socket.recv(1024).decode()
+            player = Player("Имя", addr)
+            if login.startswith("color"):
+                data = find_color(login[6:])
+                player.name, player.color = data
+            s.merge(player)
+            s.commit()
     try:
         # проверяем желающих войти в игру
         new_socket, addr = main_socket.accept()  # принимаем входящие
